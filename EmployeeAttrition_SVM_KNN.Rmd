@@ -1,0 +1,644 @@
+---
+title: "Canterra Employee Attrition"
+subtitle: 'Probability of Attrition Model and Analysis'
+author: "Esha Navaneethakrishnan and Mabel Barba"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+    number_sections: yes
+    toc_depth: '3'
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+    number_sections: yes
+geometry: margin=1in
+header-includes:
+- \usepackage{setspace}
+- \singlespacing
+linkcolor: blue
+---
+
+```{r setup, echo=FALSE, include=FALSE, message=FALSE, warning=FALSE}
+#Default Setup
+knitr::opts_chunk$set(include = FALSE, echo = FALSE, tidy=TRUE, cache=FALSE, message=FALSE, warning=FALSE,tidy.opts=list(width.cutoff=55, keep.blank.line=FALSE),fig.align='center', fig.width=8, fig.height=4, dpi = 300)
+```
+
+\pagebreak
+
+```{r importlibs, echo=FALSE}
+
+library(caret) #For confusionMatrix(), training ML models, and more
+library(class) #For knn()
+library(dplyr) #For some data manipulation and ggplot
+library(pROC)  #For ROC curve and estimating the area under the ROC curve
+
+library(ggplot2)
+library(tidyr)
+library(ROSE) #For balancing the target 
+
+library(e1071) #For svm() function
+library(pROC)  #For ROC curve and estimating the area under the ROC curve
+library(fastDummies) #To create dummy variable (one hot encoding)
+library(tidyr)
+
+#library(dplyr)
+#library(corrplot)
+#library(tidyverse)
+# library(scales)
+
+```
+\pagebreak
+# Executive Summary   
+Approximately 15% of employees leave the company every year, leading Canterra to speculate on the causes of such high attrition rates. We at E&M Analytics Consulting Firm aim to help Canterra assess the probability of attrition within the organization and to share insight into important factors relating to their high employee attrition. Canterra management can act on these findings to identify and engage with employees likely to experience attrition.  
+
+# Problem Statement and Approach 
+Our primary tasks in this analysis were twofold:  
+*    Determine the most influential variables that influence the probability of attrition, model the probability of attrition and draw insights by deploying machine learning models that include K-Nearest Neighbors and Support Vector Machines.
+<br>
+*    Evaluate which model is optimal in predicting employee attrition at Canterra.
+
+The introductory analysis consisted of exploring 4410 observations of 18 variables, assessing the univariate distributions of variables and their relationships to the target variable. The data pre-processing phase consisted in the split of the dataset into training and testing sets, using a 70% to 30% ratio. Subsequently, we examined columns and variables for missing values in both datasets, `train_data` and `test_data`, imputing NA values with the mean values of the training data. Since categorical variables can not be used directly in distance functions, such as Euclidean (used in the first model; kNN() function), we converted `BusinessTravel` to numerical using the `dummy_cols()` function. This dummy coded variable introduced new features `BusinessTravel_Travel_Frequenly` and `BusinessTravel_Travel_Rarely`. Additionally, we applied the resampling method to treat the unbalanced data seen with `Attrition` (the minority class at 16.12%). Last, we applied scaling to standardize the predictor variables in both the training and testing datasets for all our models. Following our analysis of 12 features across 4,410 observations, we constructed k-Nearest Neighbor and Support Vector Machine models, testing and analyzing different features to find the best performing classifier. Our findings are presented from the perspective of the model. The conclusion reveals the SVM-Radial-e1071 (Model 4) is the optimal approach to predict the probability of attrition. Due to the reliable, robust performance of the model in predicting employee attrition, we have confidence in our resulting recommendations.
+
+# Methodology
+## Introductory Analysis
+Exploration - Our team began with an inspection of Canterra's provided employee dataset. We discovered no duplicate observations, but did identify 73 instances of missing values which later in the analysis were replaced by imputing the mean values of the respective variable in the training data.
+
+```{r import_dataset, ,include=TRUE, echo=FALSE}
+
+#The dataset has 4410obs of 18 columns, 17 predictors and the last column as target: "Attrition"
+#Categorical variables are read asFactors
+edata = read.csv("EmployeeData.csv", stringsAsFactors = TRUE)
+str(edata)
+#summary(edata)
+```
+
+```{r duplicate_check, include=FALSE, echo=FALSE } 
+#Distinct Row Check
+duplicates <- edata[which(duplicated(edata)), ]
+if ((nrow(duplicates)) == 0) {
+  print("No duplicates detected") 
+  }
+```
+
+```{r missing_NAs, include=F, echo=F}
+#Check for columns/variables with missing values
+sapply(edata, function(x){sum(is.na(x))})
+sum(is.na(edata))
+```
+
+## Target Variable
+The Target variable in our analysis is `Attrition`. Canterra had previously reported that approximately 15% of their employees leave the company every year. This assertion is in agreement with our evaluation of the `Attrition` distribution. According to the marginal distribution of `Attrition`, we see that approximately 16.12% of our observations are of employees which have experienced attrition. Due to the moderate degree of imbalance (proportion of minority class between 1%-20%) we performed the 'Oversampling' resampling method to treat the skewed class in our training data set. The Oversampling method creates artificial data points of the minority class to balance the class label.  
+
+```{r Target_prop_table, include=FALSE, echo=FALSE}
+#Target variable has a moderate degree of imbalance NO:83.87% and YES:16.12%
+(table(edata$Attrition))
+prop.table(table(edata$Attrition))
+```
+
+## Predictor Variables 
+### Categorical Variables  
+Categorical variables include `BusinessTravel`, `Gender`, `MaritalStatus`. On the whole, none of these variables distributions are equally distributed. For modeling purposes, the Variables  `MaritalStatus` and `Gender`  were excluded to consider resources constrains and make the dataset more manageable. 
+
+
+```{r cat_var, include=FALSE, echo=FALSE, fig.width=6}
+#Retrive Categorical/Factor Variables
+cat_vars <- edata %>% select_if(is.factor)
+
+#Distributions of Categorical Variables
+prop.table(table(edata$BusinessTravel))
+prop.table(table(edata$Gender))
+prop.table(table(edata$MaritalStatus))
+
+#prop.table(table(edata$JobLevel))
+#prop.table(table(edata$Education))
+#prop.table(table(edata$EnvironmentSatisfaction))
+#prop.table(table(edata$JobSatisfaction))
+```
+### Continuous Variables 
+Continuous variables we are including in our analysis are `DistanceFromHome`, `Income`, `NumComaniesWorked`,  `TotalWorkingYears`,`TrainingTimesLastYear`, `YearsAtCompany`, `YearsWithCurrManager`,  `EnvironmentalStatisfaction`, `JobSatisfaction`.
+New features introduced after Dummy Encoding are `BusinessTravel_Travel_Frequently` and `BusinessTravel_Travel_Rarely`
+For modeling purposes, the Variables `Education` and `JobLevel` were excluded to consider resources constrains and make the dataset more manageable. We omitted the variable `Age`, as well, because in previous analysis revealed age to be a strong predictor for attrition. For this analysis, we wanted to start with a fresh perspective and in Phase 2 of the project incorporate `Age` back to our predicting models. Last, we omitted `EmployeeID` and `StandardHours` because one is a unique identifier and the latter is a constant value not relevant to the analysis.
+
+```{r cont_var, include=FALSE, echo=FALSE, fig.width=6}
+#prop.table(table(edata$Income))
+```
+
+### Correlation
+Continuous variable distributions can be observed along the diagonal of the correlation matrix in Figure# 1. The highest correlations between our target and predictors were `TotalWorkingYears`, `YearsAtCompany`, `YearsWithCurrManager`, and Age (which is not included for the remainder of the analysis). There were no extreme outliers that could potentially interfere with the SVM algorithm.
+
+```{r corr_plot, include=FALSE, echo=FALSE, warning=FALSE, fig.height=7, fig.width=9}
+#Include Attrition in Corr
+#library(tidyr)
+ex_att <- as.numeric(edata$Attrition) - 1
+edata_corr <- edata
+edata_corr$Attrition <- as.numeric(edata$Attrition) - 1
+
+corr_df <- edata_corr %>% select_if(is.numeric)
+#chart.Correlation(corr_df, col = colorRampPalette(c("#ffffff", "#61679a"))(20)) #default styling
+#chart with custom styling for html/pdf report:
+# pairs.panels(corr_df,
+#              hist.col="#61679a",
+#              show.points=TRUE,
+#              stars=TRUE,
+#              gap=0.05,
+#              pch=".",
+#              ellipses=FALSE,
+#              scale=FALSE,
+#              jiggle=TRUE,
+#              factor=2,
+#              main="Correlation",
+#              col="#c8b0c0",
+#              pty="m",
+#              font=3)
+```
+
+### Data Preprocessing 
+**Pre-process the data and prepare it for running the following classification models (KNN and SVM). (15 points)**
+
+|       Feature Engineering: Dummy Coding - Since categorical variables can not be used directly in distance functions, such as Euclidean (used in the first model; kNN() function), we converted `BusinessTravel` to numerical datatype using the `dummy_cols()` function. This dummy coded variable introduced new features `BusinessTravel__Travel_Frequenly` and `BusinessTravel_Travel_Rarely`. 
+|       Data Partition | Resampling | Missing Values - We conducted a split of the dataset into training and testing sets, using a 70% to 30% ratio. Splitting the data before any imputation or scaling is best practice to prevent data leak. Subsequently, we examined variables for missing values in both datasets, `train_data` and `test_data`, imputing NA values with the mean values of the training data. Additionally, we applied the resampling method to treat the unbalanced data seen with `Attrition`, 16.12% for the minority class 'Yes' vs 83.87%.
+|       Feature Engineering: Scaling - Last, we applied the scaling function to the predictor variables in both the training and testing datasets to standardize the variables.This step is critical because the features have different scales prone biased results due to the distance computation sensitivity of the models' algorithms. Scaling ensures the model algorithms provide accurate and reliable results.
+
+```{r dummy_coding, ,include=FALSE, echo=FALSE}
+#Creates dummy variable, removes the column used to generate the dummy columns and first dummy of the variable
+edata_dummies = dummy_cols(edata, select_columns = c('BusinessTravel'),
+                             remove_selected_columns = T,
+                             remove_first_dummy = T)
+
+#Remove variables that we will not use for distance calculation. Dataset to be used for data partition is: employee
+employee = 
+  edata_dummies %>% select(-c(EmployeeID, StandardHours, Gender, MaritalStatus, Education, JobLevel, Age))
+
+```
+
+
+```{r slip_train_test, include=F, echo=F}
+# Create data partition
+set.seed(123)  # Set a seed for reproducibility
+index = sample(nrow(employee),0.7*nrow(employee))
+
+train_data = employee[index, ]
+test_data = employee[-index, ]
+
+```
+
+
+```{r resampling_data, include=F, echo=TRUE}
+#Resampling to address class imbalance 
+
+# library(ROSE)
+ set.seed(123)
+ train_data = ovun.sample(Attrition ~ ., data = train_data, method = "over")$data
+ prop.table(table(train_data$Attrition))
+ 
+```
+
+```{r resampling_data_viz,include=TRUE, echo=FALSE, fig.width=6}
+
+# Plot new variable: we now have a better ratio of quality category
+employee  %>% ggplot(aes(x = Attrition))+ geom_bar(width = 0.2, fill="#61679a")+
+  labs(title = "Attrition Distribution", x = "Attrition", y = "Count")
+
+#Check the ratio of yes and no in the target variable
+prop.table(table(employee$Attrition)) #Target is unbalanced
+
+```
+
+```{r missing_vals, include=FALSE, echo=FALSE}
+####Include code in APPENDIX######
+#Check for columns/variables with missing values
+sapply(train_data, function(x){sum(is.na(x))})
+sapply(test_data, function(x){sum(is.na(x))})
+
+sum(is.na(train_data))
+sum(is.na(test_data))
+
+#what fraction is missing in target ?
+sum(is.na(train_data$Attrition))/nrow(train_data)
+sum(is.na(test_data$Attrition))/nrow(test_data)
+
+#No missing data in the train_data.
+#Replace missing values in test_data with the mean in train_data
+test_data[is.na(test_data$TotalWorkingYears),'TotalWorkingYears'] = mean(train_data$TotalWorkingYears,na.rm=TRUE) 
+test_data[is.na(test_data$NumCompaniesWorked),'NumCompaniesWorked'] = mean(train_data$NumCompaniesWorked,na.rm=TRUE) 
+test_data[is.na(test_data$JobSatisfaction),'JobSatisfaction'] = mean(train_data$JobSatisfaction,na.rm=TRUE) 
+test_data[is.na(test_data$EnvironmentSatisfaction),'EnvironmentSatisfaction'] = mean(train_data$EnvironmentSatisfaction,na.rm=TRUE) 
+
+```
+
+
+```{r scaling_knn, include=FALSE, echo=FALSE}
+#Using the classical approach to perform Scaling and use it in the first kNN() model.
+
+#We create different datasets for predictors and the target variable.
+#We use information from train set to scale test dataset.
+train_x = scale(train_data[, -1]) 
+test_x = scale(test_data[,-1],center = apply(train_data[,-1],2,mean),
+                         scale = apply(train_data[,-1],2,sd))
+
+#Create the target variable in data train and data test
+train_y = train_data$Attrition 
+test_y = test_data$Attrition 
+
+```
+
+### Model Building - k-Nearest Neighbor 
+**Run a K-Nearest Neighbor model to build a predictive model for employees' attrition. Use values of k to find an optimal model. (25 points)**
+#### Model 1: kNN, knn() function
+|       *About the Model 1* - The k-nearest neighbor algorithm is a non-parametric, supervised learning classifier, useful in both classification and regression, but in our analysis used for classification. The algorithm is highly unbiased and there is no need for prior assumption about the underlying data but the model does not help us understand how features are related to classes. The way this algorithm works is by calculating the distance, in Euclidean distance, between a query and all the examples in the data, selects the specified number of examples `k` closest to the query, then votes for the most frequent `label` (during classification). Prior running the algorithm, the data was standardized using the `scale()` function using the information from the train set to scale the test dataset.
+
+|       *Choosing value of K* - In this instance, we used the common practice to begin the `k` value using the formula:
+$$k = sqrt(nrow(train_x)) $$
+The formula resulted in `k=71`. Then, we ran a vector of 50 different `k` values to view the best performers. The results are seen in the "Accuracy vs k-Values" plot (Figure# *3*) where the best `k` value the algorithm selected is 1. Smaller values of `k` yield to a higher variance model. This indicates the data might be overfitted.
+
+|       *Output summary* - The model resulted with a 65% Accuracy to predict `Attrition` using the attributes given. Additionally, the metric Sensitivity, which measures how many were correctly classified as true positives, resulted in 73%. And, Specificity, which measures how many were correctly classified as true negative, resulted in 64%.
+ 
+```{r Determine_K, include=FALSE, echo=FALSE}
+#Common practice to begin the `k` value using the formula
+#train_x is the scaled dataset
+k = sqrt(nrow(train_x)) 
+k #71
+
+#Caret already does this calculation automatically, therefore we don't use train_x after this code
+```
+
+```{r kNN_func, include=FALSE, echo=FALSE}
+#Using function knn() from the package 'class' to run the model
+#For KNN, prediction is automatically indicated in modeling
+#Scaling is required to use the knn(). Data scaled in lines 275-276.
+
+set.seed(123) #Seed must be set in order to ensure reproducibility of results and R will randomly break the tie. 
+model_knn = knn(train=train_x, test=test_x, cl=train_y, k=71) 
+model_knn #to see the predicted classes for the test dataset
+
+#knn() Model Evaluation
+#ConfusionMatrix() function from the 'caret' package
+confusionMatrix(data = model_knn, 
+                reference = test_y,
+                positive = "Yes")
+
+
+####Accuracy for different values of k
+
+#Create output vector with some rows and columns (to save output of different values of k)
+#Create a loop to go through different values of k and capture the accuracy from the confusion matrix and store results in output
+#Let's do it for values of k between 1 and 50, total of 50 values
+output = matrix(ncol=2, nrow=50)
+
+for (k_val in 1:50){
+  
+  #Storing predicted values for each run of the loop (i.e., each value of k)
+  set.seed(123)
+  temp_pred = knn(train = train_x
+               , test = test_x
+               , cl = train_y
+               , k = k_val)
+  
+  #Calculate performance measures for the given value of k
+  temp_eval = confusionMatrix(temp_pred, test_y) 
+  temp_acc = temp_eval$overall[1]
+  
+  #Add the calculated accuracy as a new row in the output matrix
+  output[k_val, ] = c(k_val, temp_acc) 
+  
+}
+
+#Convert the output to a data frame and plot the results
+output = as.data.frame(output)
+names(output) = c("K_value", "Accuracy")
+
+# Plot to find out that value of k that gives the highest accuracy
+ggplot(data=output, aes(x=K_value, y=Accuracy, group=1)) +
+  geom_line(color="#61679a")+
+  geom_point(color="#61679a")+
+  theme_bw()
+
+```
+
+
+```{r kNN_func_2, include=FALSE, echo=FALSE}
+#Run the model and store in model_1. Print OUTPUT
+#To get the predicted class/category for each data in test
+set.seed(123)
+model_1 = knn(train=train_x, test=test_x, cl=train_y, k=71)
+
+#To get the predicted probability of belonging to each class/category
+set.seed(123)
+model_1_probs = attributes(knn(train=train_x, test=test_x, cl=train_y, k=71, prob=TRUE))$prob
+
+
+#Check model evaluation
+confusionMatrix(data = model_1, 
+                reference = test_y, 
+                positive = "Yes")
+
+
+```
+
+#### Model 2: kNN, "caret" Package
+|       *About the Model 2* - The "caret" package (Classification And Regression Training) is a set of functions that attempt to streamline the process for creating predictive models (Kuhn, 2019). It uses the general function `train()` that can handle many methods for predicting, in this use case we used the `knn` method. The preProcess parameter allows us to specify a list of pre-processing techniques to be applied to the training data. We set it to method = "center" which subtracts the mean of the predictor's data from the predictor values while method = "scale" divides by the standard deviation (R Docs:Pre-Processing of Predictors).
+
+|       *k-Fold Cross Validation* - The `trainControl()` function is used to specify the parameters for the resampling method during model training. In model 2, the method argument is set to "cv", for cross-validation. This k-fold process divided the dataset into 10 subsets or folds, and the model was trained and tested 10 times. In each iteration, one of the folds was used as the test set, and the remaining 9 folds were used for training. The process was repeated 10 times, with each fold serving as the test set exactly once. The final performance metric is an average of the metrics obtained in each iteration.
+
+|       *Choosing value of K* - We set the parameter tuneLength = 38 (`k` value) but the `train()` function from "caret" automatically chooses the best value of k to use in prediction. The Resampling results across tuning parameters selected `k=1` with an Accuracy of 98.91%. We do believe this smaller `k` value indicates an overfitting in Model 2 (and Model 1).
+
+|       *Output summary* - Accuracy : 97.51% |  Sensitivity : 89.30% (true positives) | Specificity : 99.10% (true negatives)
+We conclude Model 2 is the best classifier for the k-nearest neighbor algorithm.
+
+
+```{r kNN_caret, include=FALSE, echo=FALSE}
+#Using CARET Package
+# Cross validation parameters using trainControl(). Specify 10-fold cross validation
+ctrl = trainControl(method="cv",number=10)
+
+# CV KNN model
+# train() is a general function from caret package that can handle many methods
+# Here we're using "knn" based on the CV parameters that we set earlier
+# tuneLength=55 means the function automatically runs/tests for 55 different values of k
+set.seed(123)
+knn_cv = train(
+  Attrition ~ ., data = train_data,  #Using train data because it is not scaled. 
+  method = "knn", trControl = ctrl, 
+  preProcess = c("center","scale"), 
+  tuneGrid = expand.grid(k = 1:20),
+  tuneLength = 38)  #
+
+# assess results
+knn_cv
+```
+
+```{r kNN_caret_plot, include=FALSE, echo=TRUE}
+# Plot accuracy versus different values of k used by tuneLength
+plot(knn_cv, main = "Model 2: kNN caret Performance")
+
+```
+
+```{r caret1_top_vars, include=FALSE, echo=FALSE}
+# Plot most important variables
+plot(varImp(knn_cv), 5, main = "Most Important Variables for kNN caret (Model 2)") 
+
+#To get the predicted class/category for each data in test
+model_2 = predict(knn_cv, test_data, type="raw")
+
+#To get the predicted probability of belonging to each class/category   ###NOT GETTING PROBABILITY
+model_2_probs = predict(knn_cv, test_data, type="prob")[,2]
+
+confusionMatrix(data = model_2, 
+                reference = test_y, 
+                positive = "Yes")
+
+```
+
+
+```{r svm_1_startingpoint, include=FALSE, echo=FALSE}
+### Basic SVM starting point.No need to include in the report
+# SVM1 = svm(formula = Attrition ~ ., 
+#            data = train_data,
+#            type = 'C-classification', #default setting 
+#            kernel = 'linear', #default setting
+#            scale=TRUE) #default setting, SVM is sensitive to scale.
+# 
+# summary(SVM1)
+
+#The output indicates that a linear kernel was used with default cost of 1, 
+#and that there were 369 support vectors, 185 in one class and 184 in the other. 
+
+#which observations are support vectors (head() prints the index of the first few)
+#head(SVM1$index)
+```
+
+```{r svm_2_startingpoint, include=FALSE, echo=FALSE}
+### Basic SVM starting point. No need to include in the report
+#What if we instead used a Attrition value of the cost parameter?
+# SVM2 = svm(formula = Attrition ~ .,
+#            data = train_data,
+#            type = 'C-classification',
+#            kernel = 'linear', 
+#            cost=0.1,
+#            scale=TRUE)
+
+#426 support vectors (wider margin)
+#summary(SVM2)
+```
+
+### Model Building - SVM
+**Run a Support Vector Machines model to build a predictive model for employees' attrition. Try out different model settings to find an optimal model. (25 points)**
+
+The “Support Vector Machines” (SVM) model is a supervised machine learning algorithm used for both classification and regression tasks. The primary objective of an SVM is to find the optimal hyperplane that best separates the data points of different classes in a high-dimensional space. Some of the key characteristics of the Support Vector Machine would be a hyperplane, support vectors, kernel trick, and a C-parameter; the kernel trick can handle non-linear decision boundaries, while the `C` parameter controls the trade-off when it comes to classifying training points and achieving a smooth decision boundary. The `tune()` function and the `e1071` package can be used for training and deploying SVM models; the "caret" package with the general function, `train()`, was also used to deploy the SVM model for the purposes of this report.
+
+One of the advantages to SVM is the kernel trick and its simple interpretation. A disadvantages to SVM is its sensitivity to outliers, which the recommendation is to remove them and/or the scale the data.
+
+#### Model 3: SVM-Linear, "tune" function*
+
+|       *About Model 3* - The SVM Model 3 uses the default kernel function, Linear, to add feature space. We used the `tune()` wrapper function in our code to perform the ten-fold cross-validation. Additionally, we created 6 searches for cost parameters (0.001,0.01,0.1,1,5,10) to find the best `c` parameter. The cost measures the error or missclassification rate: $$1-Accuracy$$
+
+|       *Output summary* - Accuracy: 63.34% | Sensitivity: 67.91% (true positives) | Specificity: 62.45% (true negative)
+The algorithm found the best performance by lowest cross validation error of 0.3249459, for cost parameter of 0.01. 
+
+
+```{r svm_tune_function, include=FALSE, echo=TRUE}
+
+# Tuning SVM Model (searching for the best parameters, running like a loop)
+
+#The e1071 library includes a built-in function, tune(), to perform cross validation. 
+#By default, tune() performs ten-fold cross-validation on a set of models of interest. 
+#In order to use this function, we pass in relevant information about the set of models that are under consideration. 
+#Setting the probability to TRUE provides probability predictions to later use for ROC curve.
+set.seed(123)
+tune.out = tune(svm, Attrition~., data=train_data, kernel ="linear", probability=TRUE,
+                ranges=list(cost=c(0.001,0.01,0.1,1,5,10))) #list of values to search for cost parameters
+
+summary(tune.out)
+#search, tune() as a wrapper.
+#sampling method: 10-fold cross validation to find the best parameter.
+#best performance: By lowest cross validation error, 0.3249459, for cost parameter of 0.01. Error is the missclassification rate of 1-Accuracy.
+```
+
+```{r tune_best_mod, include=FALSE, echo=FALSE}
+
+#The tune() function stores the best model obtained, which can be accessed as follows:
+bestmod = tune.out$best.model  #best model, save it to use for prob predictions.
+SVM_pred = predict(bestmod, newdata = test_data[-1]) #obtaining predicted classes. Needed for Confusion matrix function.
+
+#Obtaining predicted probabilities (to use in creating ROC curves to compare different models)
+SVM_prob = attributes(predict(bestmod, newdata=test_data[-1], probability=TRUE))$probabilities[,1]
+
+# Check model evaluation
+confusionMatrix(data = SVM_pred, 
+                reference = test_data$Attrition, 
+                positive = "Yes")
+
+#Metrics:  Sensitivity : 0.6791, Sensitivity/Recall (how many were correctly classified as true positives?)         
+#          Specificity : 0.6245, Specificity is focused on negative class.(how many were correctly classified as true negative?)
+#Accuracy : 0.6334   
+
+```
+
+```{r svm_funct_gamma_, include=FALSE, echo=FALSE}
+##Another way to do svm. No need to include in the report
+#If we change to Gaussian Kernel, are we going to see an improvement in our model?
+
+#we add the gamma hyperparameter, 
+#Gamma decides that how much curvature we want in a decision boundary. 
+#High values of gamma means more curvature and low values mean less curvature
+# SVMR = svm(formula = Attrition ~ .,
+#             data = train_data,
+#             type = 'C-classification',
+#             cost=1,
+#             gamma=0.05,
+#             kernel='radial')
+#summary(SVMR)
+```
+
+#### Model 4: SVM-Radial, "e1071" package
+|       *About Model 4* - The SVM Model 4 uses the kernel function, Radial or radial basis function (RBF), to add feature space. We used the `tune()` wrapper function in our code to perform the SVM algorithm and the ten-fold cross-validation. The Radial function offers the parameters for cost of misclassification and gamma. Gamma is a crucial hyperparameter that influences the flexibility of the model and its shape of the decision boundary. This parameter handles non-linear classification. A high gamma value translated to only the closest data points to the decision boundary will carry the weight leading to a smoother boundary. The gamma parameter works in conjunction with the regularization parameter cost. For example, high values of `C` and high values of `gamma` can result in overfitting, while low values of both can yield to underfitting.
+We created 6 searches for cost parameters (0.001,0.01,0.1,1,5,10) to find the best `c` parameter. For `gamma` we added 4 searches (0.5,1,2,3). the `tune()` function performs by default 10-Fold Cross Validation.  
+
+|       *Output summary* - Accuracy: 97.35% | Sensitivity: 85.12% (true positives) | Specificity: 99.73% (true negative)
+The algorithm found the best performance by lowest cross validation error of 0.0007874016, for cost parameter of 5 and gamma of 3. We concluded the model is not overfitted/underfitted based on the highest/lowest parameters that would indicate the model is underperforming (High 10|3, Low 0.01|0.5).
+
+```{r svm_radial_e1071_tune2_1, include=FALSE, echo=FALSE}
+#e1071
+#We can perform cross-validation using tune() to select the best choice of cost and gamma for an SVM with a radial kernel
+set.seed(123)
+tune.out2 = tune(svm, Attrition ~., data=train_data, kernel ="radial", probability=TRUE,
+               ranges=list(cost=c(0.01,0.1,1,5,10), gamma=c(0.5,1,2,3))) #searching for cost and gamma.
+summary(tune.out2)
+#parameter | function:
+#degree - polynomial
+#cost/gamma - radial
+#tuning with ranges, need to include 
+#no parameter? - sigmoid 
+```
+
+```{r svm_radial_e1071_tune2_2, include=FALSE, echo=TRUE}
+bestmod2 = tune.out2$best.model
+SVMR_pred = predict(bestmod2, newdata = test_data[-1]) #obtaining predicted classes
+
+#Obtaining predicted probabilities
+SVMR_prob = attributes(predict(bestmod2, newdata=test_data[-1], probability=TRUE))$probabilities[,1]
+
+#Check model evaluation
+confusionMatrix(data = SVMR_pred, 
+                reference = test_data$Attrition, 
+                positive = "Yes")
+
+
+# Accuracy : 0.9735
+# Sensitivity : 0.8512          
+# Specificity : 0.9973 
+
+```
+
+#### Model 5: SVM-Radial, "caret" Package
+|       *About Model 5* - For Model 5, we used the "svmRadial" kernel, we specified the 10-Fold Cross Validation and tested 10 different values of `c` by setting the parameter `tuneLength=10`. The "caret" package `train()` function allowed us to preprocess the data using "center" and "scale". And, automatically chose the best value of `k` to use in the prediction.
+
+|       *Output summary* - Accuracy: 93.2%  | Sensitivity: 86.05% (true positive) | Specificity: 94.58% (true negative)
+
+```{r svm_caret_target_vars, include=FALSE, echo=FALSE}
+#Using CARET Package for cross validation and parameter tuning
+# Read more about model training and tuning using caret package:
+# https://topepo.github.io/caret/model-training-and-tuning.html
+
+#The levels of the target variables need to change to "Yes/No" instead of "1/0"!
+train_data_copy = train_data
+test_data_copy = test_data
+
+levels(train_data_copy$Attrition) = c("No","Yes")
+levels(test_data_copy$Attrition) = c("No","Yes")
+```
+
+```{r svm_caret_5, include=FALSE, echo=FALSE}
+
+# We can set our cross validation parameters using trainControl()
+# Specify 10-fold cross validation
+# classProbs=T makes sure probabilities are also calculated and can be accessed later
+ctrl = trainControl(method="cv",number=10,classProbs=TRUE)
+
+# train() is a general function from caret package that can handle many methods
+# Here we're using "svmRadial" based on the CV parameters that we set earlier. Other methods are "svmLinear" and "svmPoly"
+# By setting tuneLength=10, the function tests 10 different value of C
+# Specified 10-fold cross validation
+
+set.seed(123)
+SVMR_caret = train(
+  Attrition ~ ., data = train_data_copy,
+  method = "svmRadial", trControl = ctrl, 
+  preProcess = c("center","scale"), tuneLength = 10) #Searching over cost, fixes sigma or gamma.
+
+SVMR_caret
+plot(SVMR_caret, main="Support Vector Machine Model 4")
+
+#To get the predicted class/category for each data in test
+#Note: When using the train() function from "caret" package, the model automatically chooses the best value of k to use in prediction
+SVMR_pred2 = predict(SVMR_caret, test_data_copy[,-1], type="raw")
+
+#To get the predicted probability of belonging to each class/category
+SVMR_prob2 = predict(SVMR_caret, test_data_copy[,-1], type="prob")[,2]
+
+confusionMatrix(data = SVMR_pred2, 
+                reference = test_data_copy$Attrition, 
+                positive = "Yes")
+
+
+# Accuracy : 0.932  
+# Sensitivity : 0.8605         
+# Specificity : 0.9458 
+
+
+```
+
+
+#### Model Comparison
+**Compare the best KNN and SVM models by their model evaluation metrics. Which is a better model, and why? (10 points)**
+|       *Best kNN* - AUC for kNN.caret: 0.941999   
+|       *Best SVM* - AUC for SVM.Radial-e1071: 0.9802116 
+
+```{r model_comparison, include=FALSE, echo=TRUE}
+
+#Comparing classifiers
+
+#Using plot.roc() and auc() functions from "pROC" package:
+
+plot.roc(test_y,model_1_probs,col="#ba60ae",legacy.axes=T)
+plot.roc(test_y,model_2_probs,add=TRUE,col="#74c07a")
+plot.roc(test_data$Attrition,SVM_prob,add=TRUE,col="#257ca3", legacy.axes=T)
+plot.roc(test_data$Attrition,SVMR_prob,add=TRUE,col="#e27272",lty=5,legacy.axes=T)
+plot.roc(test_data_copy$Attrition,SVMR_prob2,add=TRUE,col="#a060ba")
+legend("bottomleft",legend=c("kNN","kNN.CV","SVM(linear)","SVM(radial)-e1071","SVM(radial)-caret"),
+       col=c("#ba60ae","#74c07a","#257ca3","#e27272","#a060ba"),lty=c(1,2,3,4,5),cex=0.8,
+       text.width = 0.5,  # Adjust the text.width to make the legend text smaller
+       text.col = "black")  # Set the text color to black)
+
+
+#Calculate the area under the ROC curve for the classifiers
+auc_knn <- auc(test_y,model_1_probs) #kNN
+auc_knn.cv <- auc(test_y,model_2_probs) #kNN caret
+auc_SVM.l <- auc(test_data$Attrition,SVM_prob) #SVM Linear
+auc_SVM.r <- auc(test_data$Attrition,SVMR_prob) #SVM Radial (good combination radial and cost)
+auc_SVM.r.cv <- auc(test_data_copy$Attrition,SVMR_prob2) #SVM Radial "caret"
+
+cat("AUC for kNN:", auc_knn, "\n")
+cat("AUC for kNN.caret:", auc_knn.cv, "\n")
+cat("AUC for SVM.Linear:", auc_SVM.l, "\n")
+cat("AUC for SVM.Radial-e1071:", auc_SVM.r, "\n")
+cat("AUC for SVM.Radial.caret:", auc_SVM.r.cv, "\n")
+
+# Area under the curve: 0.5239
+# Area under the curve: 0.942
+# Area under the curve: 0.7088
+# Area under the curve: 0.9802
+# Area under the curve: 0.9134
+
+
+```
+#Conclusion and Recommendation
+**Summarize your findings, discuss the pros and cons of your proposed models, and provide your recommendations to management based on insights generated from the above model. (15 points)**
+
+After building and testing 5 models to predict attrition, we compared the 2 best classifiers which are Model 2: kNN, "caret" Package and Model 4: SVM-Radial, "e1071" package. Their AUC scores are 0.941999 and 0.9802116 respectively, confirming both perform well at distinguishing between the employees which will and will not leave Canterra. Additionally, their scores for Sensitivity (true positives) and Specificity (true negatives) are correctly classifying its true class. The classifier SVM-Radial-e1071 (Model 4) is the optimal approach to predict in general the probability of employee attrition. Model 2 performs better than Model 4 when classifying the true positives class.
+
+Given our findings we recommend Canterra to decide if predicting the true positives is a priority or identifying the true negatives is. Model 2 performs slightly better at identifying employees experiencing attrition. While Model 4 performs slightly better at identifying non-attrition employees. Some of the most influential predictors such as YearsAtCompany, TotalWorkingYears, YearsWithCurrManager, JobSatisfaction, and EnvironmentSatisfaction. Canterra would find it most productive to focus on improving in these areas. It would prove fruitful to increase efforts around employees who have not been with the company for very long. It would be wise to implement programs and initiatives to help these employees feel a sense of belonging and encourage a high job satisfaction level.
+
+
